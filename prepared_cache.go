@@ -1,16 +1,18 @@
 package gocql
 
 import (
-	"github.com/gocql/gocql/internal/lru"
 	"sync"
+
+	"github.com/gocql/gocql/internal/lru"
 )
 
 const defaultMaxPreparedStmts = 1000
 
 // preparedLRU is the prepared statement cache
 type preparedLRU struct {
-	mu  sync.Mutex
-	lru *lru.Cache
+	mu       sync.Mutex
+	lru      *lru.Cache
+	hitCache map[string]int
 }
 
 // Max adjusts the maximum size of the cache and cleans up the oldest records if
@@ -43,7 +45,21 @@ func (p *preparedLRU) add(key string, val *inflightPrepare) {
 func (p *preparedLRU) remove(key string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.lru.Remove(key)
+	if p.hitCache == nil {
+		p.hitCache = make(map[string]int)
+	}
+	b := p.lru.Remove(key)
+	if b == false {
+		if p.hitCache[key] > 5 {
+			return false
+		} else {
+			p.hitCache[key] = p.hitCache[key] + 1
+			return true
+		}
+	} else {
+		p.hitCache[key] = 0
+	}
+	return b
 }
 
 func (p *preparedLRU) execIfMissing(key string, fn func(lru *lru.Cache) *inflightPrepare) (*inflightPrepare, bool) {
